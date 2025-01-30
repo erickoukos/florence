@@ -1,0 +1,139 @@
+---
+title: "Understanding the structure of an Econometrics study"
+author: "FLORENCE"
+date: "2025-01-30"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# **Part A: Structure of an Econometrics Study**
+
+## **Microeconomics Research Question**
+**How does an individual's income and credit history affect their probability of credit card approval?**
+
+### **General Structure**
+- **Type of Research:** Secondary
+- **Variables:**
+  - **Dependent:** `Acc` (Credit Card Application Accepted)
+  - **Independent:** `MDR`, `Age`, `Income`, `Avgexp`, `Ownrent`, `Selfempl`
+- **Econometric Model:** Logistic Regression
+
+\[
+P(Acc = 1) = \frac{e^{\beta_0 + \beta_1 MDR + \beta_2 Age + \beta_3 Income + \beta_4 Avgexp + \beta_5 Ownrent + \beta_6 Selfempl}}{1 + e^{\beta_0 + \beta_1 MDR + \beta_2 Age + \beta_3 Income + \beta_4 Avgexp + \beta_5 Ownrent + \beta_6 Selfempl}}
+\]
+
+## **Macroeconomics Research Question**
+**How does economic growth affect overall credit card approval rates in an economy?**
+
+### **General Structure**
+- **Type of Research:** Secondary
+- **Variables:**
+  - **Dependent:** `Credit Card Approval Rate`
+  - **Independent:** `GDP Growth`, `Unemployment Rate`, `Inflation Rate`, `Interest Rate`
+- **Econometric Model:** Multiple Linear Regression
+
+\[
+CreditCardApprovalRate = \beta_0 + \beta_1 GDPGrowth + \beta_2 Unemployment + \beta_3 Inflation + \beta_4 InterestRate + \epsilon
+\]
+
+---
+
+# **Part B: Modelling Econometric Data in R**
+## **Step 1: Load Required Libraries and Dataset**
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)  # Data manipulation
+library(dplyr)      # Data filtering
+library(ggplot2)    # Visualization
+library(caret)      # Machine Learning
+library(stargazer)  # Regression tables
+library(MatchIt)    # Causal inference
+library(broom)      # Tidying model output
+
+# The dataset
+df <- read.csv("dataset_for_assignment(2)(1).csv")
+
+# First few rows
+head(df)
+```
+
+
+```{r}
+# Any missing values?
+colSums(is.na(df))
+
+# Summary statistics
+summary(df)
+```
+
+### Normalizing Income and Avgexp for better model performance
+```{r}
+df$Income <- df$Income / max(df$Income)
+df$Avgexp <- df$Avgexp / max(df$Avgexp)
+```
+
+### # Fitting a logistic regression model
+
+```{r}
+logit_model <- glm(Acc ~ MDR + Age + Income + Avgexp + Ownrent, data = df, family = binomial)
+
+# Model summary
+summary(logit_model)
+```
+
+### Multicollinearity Check
+
+```{r}
+correlation_matrix <- cor(df %>% select(-Acc))
+print(correlation_matrix)
+```
+
+
+### Average Treatment Effect (ATE) for Income
+
+```{r}
+# Median income
+median_income <- median(df$Income)
+
+# Treatment and control groups
+df$treatment <- ifelse(df$Income > median_income, 1, 0)
+
+# Average approval rate
+treatment_mean <- mean(df$Acc[df$treatment == 1])
+control_mean <- mean(df$Acc[df$treatment == 0])
+
+# Compute ATE
+ATE <- treatment_mean - control_mean
+ATE
+```
+
+```{r}
+# Coefficients and plot
+logit_coeffs <- tidy(logit_model)
+ggplot(logit_coeffs, aes(x = term, y = estimate)) +
+  geom_col(fill = "steelblue") +
+  geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
+  labs(title = "Logistic Regression Coefficients", x = "Variables", y = "Coefficient Value") +
+  theme_minimal()
+
+```
+
+
+```{r}
+# Approval rate for treatment and control groups plot
+df |> 
+  group_by(treatment) |> 
+  summarise(approval_rate = mean(Acc)) |> 
+  ggplot(aes(x = factor(treatment), y = approval_rate, fill = factor(treatment))) +
+  geom_bar(stat = "identity") +
+  labs(title = "Approval Rate by Income Group", x = "Income Group (0 = Low, 1 = High)", y = "Approval Rate") +
+  scale_fill_manual(values = c("red", "blue")) +
+  theme_minimal()
+```
+
