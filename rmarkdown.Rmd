@@ -8,6 +8,7 @@ output:
 ---
 
 ```{r setup, include=FALSE}
+rm(list = ls())
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
@@ -45,93 +46,164 @@ CreditCardApprovalRate = \beta_0 + \beta_1 GDPGrowth + \beta_2 Unemployment + \b
 ---
 
 # **Part B: Modelling Econometric Data in R**
-## **Step 1: Load Required Libraries and Dataset**
+## **Loading Required Libraries and Dataset**
 
-```{r, message=FALSE, warning=FALSE}
-library(tidyverse)  # Data manipulation
-library(dplyr)      # Data filtering
-library(ggplot2)    # Visualization
-library(caret)      # Machine Learning
-library(stargazer)  # Regression tables
-library(MatchIt)    # Causal inference
-library(broom)      # Tidying model output
+#### Loading Required Libraries
 
-# The dataset
-df <- read.csv("dataset_for_assignment(2)(1).csv")
-
-# First few rows
-head(df)
+```{r, warning=FALSE}
+library(tidyverse)  
+library(dplyr)      
+library(ggplot2)    
+library(caret)      
+library(stargazer) 
+library(MatchIt)    
+library(broom)      
+library(glmnet)     
+library(car)        
+library(ipw)       
 ```
 
+### Dataset
 
 ```{r}
-# Any missing values?
-colSums(is.na(df))
+df <- read.csv("dataset_for_assignment(2)(1).csv")
+```
 
-# Summary statistics
+#### Checking for missing values and summary stats
+
+```{r}
+colSums(is.na(df))
+```
+
+```{r}
 summary(df)
 ```
 
-### Normalizing Income and Avgexp for better model performance
+
+#### Checking correlations to avoid multicollinearity
+
+```{r}
+correlation_matrix <- cor(df  |>
+                            select(-Acc))
+print(correlation_matrix)
+```
+
+
+#### Removing highly correlated variables - Income or Avgexp 
+
+
+#### Normalizing Income and Avgexp
 ```{r}
 df$Income <- df$Income / max(df$Income)
 df$Avgexp <- df$Avgexp / max(df$Avgexp)
 ```
 
-### # Fitting a logistic regression model
+
+#### Checking for Variance Inflation Factor (VIF) for multicollinearity
 
 ```{r}
-logit_model <- glm(Acc ~ MDR + Age + Income + Avgexp + Ownrent, data = df, family = binomial)
-
-# Model summary
-summary(logit_model)
-```
-
-### Multicollinearity Check
-
-```{r}
-correlation_matrix <- cor(df %>% select(-Acc))
-print(correlation_matrix)
+vif_check <- vif(lm(Acc ~ MDR + Age + Income + Avgexp + Ownrent, data = df))
+print(vif_check)
 ```
 
 
-### Average Treatment Effect (ATE) for Income
+None of the VIF > 5 for any variable. 
+
+#### Fitting Regularized Logistic Regression (Lasso for feature selection)
 
 ```{r}
-# Median income
+x <- as.matrix(df  |> 
+                 select(MDR, Age, Income, Avgexp, Ownrent))
+y <- df$Acc
+cv_model <- cv.glmnet(x, y, family = "binomial", alpha = 1) 
+best_lambda <- cv_model$lambda.min
+logit_model <- glmnet(x, y, family = "binomial", alpha = 1, lambda = best_lambda)
+```
+
+
+#### Model Summary
+```{r}
+print(logit_model)
+```
+
+
+#### Average Treatment Effect (ATE) for Income
+```{r}
 median_income <- median(df$Income)
-
-# Treatment and control groups
 df$treatment <- ifelse(df$Income > median_income, 1, 0)
+```
 
-# Average approval rate
-treatment_mean <- mean(df$Acc[df$treatment == 1])
-control_mean <- mean(df$Acc[df$treatment == 0])
 
-# Compute ATE
-ATE <- treatment_mean - control_mean
-ATE
+#### Propensity Score Matching
+```{r}
+match_model <- matchit(treatment ~ MDR + Age + Avgexp + Ownrent, data = df, method = "nearest")
+matched_data <- match.data(match_model)
+ATE <- mean(matched_data$Acc[matched_data$treatment == 1]) - mean(matched_data$Acc[matched_data$treatment == 0])
+print(paste("ATE after Matching:", ATE))
+```
+
+
+#### Inverse Probability Weighting (IPW)
+
+```{r}
+df$treatment <- as.integer(df$treatment)  
+weight_model <- ipwpoint(exposure = treatment, 
+                         family = "binomial",
+                         link = "logit",
+                         denominator = ~ MDR + Age + Avgexp + Ownrent, 
+                         data = df)
+
+```
+
+
+
+#### Computing weighted ATE
+
+```{r}
+# Extract the computed IPW weights
+df$ipw <- weight_model$ipw.weights
+
+# Check if weights have extreme values (important for stability)
+summary(df$ipw)
 ```
 
 ```{r}
-# Coefficients and plot
-logit_coeffs <- tidy(logit_model)
+# Compute weighted ATE
+weighted_ATE <- mean(df$Acc * df$ipw, na.rm = TRUE)
+
+# Print final ATE result
+print(paste("ATE using IPW:", weighted_ATE))
+
+```
+
+
+
+# Logistic Regression Coefficients Plot
+
+```{r}
+# Fit logistic regression using glm() to get standard errors
+logit_model_glm <- glm(Acc ~ MDR + Age + Income + Avgexp + Ownrent, data = df, family = binomial)
+
+# Convert model summary to a tidy format
+logit_coeffs <- broom::tidy(logit_model_glm)
+
+# Plot with standard errors
 ggplot(logit_coeffs, aes(x = term, y = estimate)) +
   geom_col(fill = "steelblue") +
   geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
   labs(title = "Logistic Regression Coefficients", x = "Variables", y = "Coefficient Value") +
   theme_minimal()
-
 ```
 
+#### Approval Rate by Income Group Plot
 
 ```{r}
-# Approval rate for treatment and control groups plot
 df |> 
   group_by(treatment) |> 
   summarise(approval_rate = mean(Acc)) |> 
   ggplot(aes(x = factor(treatment), y = approval_rate, fill = factor(treatment))) +
   geom_bar(stat = "identity") +
+  geom_errorbar(aes(ymin = approval_rate - sd(approval_rate), ymax = approval_rate + sd(approval_rate)), width = 0.2) +
   labs(title = "Approval Rate by Income Group", x = "Income Group (0 = Low, 1 = High)", y = "Approval Rate") +
   scale_fill_manual(values = c("red", "blue")) +
   theme_minimal()
